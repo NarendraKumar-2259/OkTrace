@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.2.20"
+    kotlin("jvm") version "1.9.23"
 }
 
 group = "io.github.narendrakumar2259"
@@ -10,12 +10,14 @@ repositories {
 }
 
 dependencies {
+    compileOnly("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation(kotlin("test"))
 }
 
 tasks.test {
     useJUnitPlatform()
 }
+
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(8)
 }
