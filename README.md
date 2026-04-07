@@ -58,7 +58,7 @@ dependencyResolutionManagement {
 Add the dependency:
 ```kotlin
 dependencies {
-    implementation("com.github.NarendraKumar-2259:OkTrace:1.0.0")
+    implementation("com.github.NarendraKumar-2259:OkTrace:main-SNAPSHOT")
 }
 ```
 
