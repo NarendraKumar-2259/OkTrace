@@ -11,23 +11,18 @@
 
 ## The Problem
 
-When you have multiple interceptors in your OkHttp client, 
-debugging becomes painful. You have no visibility into which 
-interceptor:
+When you have multiple interceptors in your OkHttp client, debugging becomes painful. You have no visibility into which interceptor:
 
 - Added, removed, or modified a header
 - Changed the URL
 - Changed the HTTP method
 - Modified the request body
 
-OkTrace solves this by showing you a detailed diff at every 
-step of the chain.
+OkTrace solves this by showing you a detailed diff at every step of the chain.
 
 ---
 
 ## The Solution
-
-OkTrace wraps each interceptor individually and shows a **diff at every step**:
 ```
 ┌──────────────────────────────────────────────────────
 │ ▶  POST  https://api.example.com/v1/login
@@ -95,10 +90,20 @@ val client = OkHttpClient.Builder()
 ---
 
 ## Configuration
+
+> ⚠️ OkTrace is a **debug-only** tool. Never enable it in production as it logs sensitive request data.
 ```kotlin
-OkTrace.logTag        = "MyApp"  // change log tag (default: "OkTrace")
-OkTrace.enabled       = false    // disable at runtime
-TraceStore.maxEntries = 50       // limit memory usage (default: 100)
+// In your Application class
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        if (BuildConfig.DEBUG) {
+            OkTrace.enabled       = true    // only in debug builds!
+            OkTrace.logTag        = "MyApp" // change log tag (default: "OkTrace")
+            TraceStore.maxEntries = 50      // limit memory usage (default: 100)
+        }
+    }
+}
 ```
 
 ---
