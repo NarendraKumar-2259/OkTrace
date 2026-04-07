@@ -1,3 +1,5 @@
+package io.github.narendrakumar2259.oktrace
+
 import java.util.UUID
 
 enum class TraceStatus { IN_FLIGHT, SUCCESS, FAILURE }

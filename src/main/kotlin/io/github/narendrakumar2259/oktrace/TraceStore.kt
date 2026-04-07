@@ -1,9 +1,5 @@
 package io.github.narendrakumar2259.oktrace
 
-import InterceptorSpan
-import ResponseSnapshot
-import TraceEntry
-import TraceStatus
 import java.util.concurrent.ConcurrentHashMap
 
 object TraceStore {
