@@ -12,6 +12,7 @@ internal class OkTraceInterceptor(
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
+        if (!OkTrace.enabled) return chain.proceed(chain.request())
         val request = chain.request()
         val entry = TraceEntry(url = request.url.toString(), method = request.method)
 
@@ -115,7 +116,7 @@ internal fun Request.toSnapshot() = RequestSnapshot(
     url         = url.toString(),
     method      = method,
     headers     = headers.toMap(),
-    bodyPreview = null,
+    bodyPreview = captureBodyPreview(),
 )
 
 internal fun Response.toSnapshot() = ResponseSnapshot(

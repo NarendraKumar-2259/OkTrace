@@ -1,5 +1,7 @@
 package io.github.narendrakumar2259.oktrace
 
+import okio.Buffer
+
 private const val PREVIEW_BYTES = 4096L
 
 internal fun okhttp3.Response.captureBodyPreview(): String? = try {
@@ -24,6 +26,14 @@ internal fun ByteArray.isLikelyText(): Boolean {
     }
     return printable.toDouble() / sample.size > 0.85
 }
+
+internal fun okhttp3.Request.captureBodyPreview(): String? = try {
+    val copy = newBuilder().build()
+    val buffer = Buffer()
+    copy.body?.writeTo(buffer)
+    val bytes = buffer.readByteArray()
+    if (bytes.isLikelyText()) bytes.toString(Charsets.UTF_8).take(4096) else null
+} catch (_: Exception) { null }
 
 internal object RequestDiff {
     fun diff(before: RequestSnapshot, after: RequestSnapshot) = RequestDiffResult(
