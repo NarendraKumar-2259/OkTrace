@@ -8,9 +8,7 @@ import okhttp3.Response
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-internal class OkTraceInterceptor(
-    private val logTag: String,
-) : Interceptor {
+internal class OkTraceInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         if (!OkTrace.enabled) return chain.proceed(chain.request())
@@ -31,7 +29,7 @@ internal class OkTraceInterceptor(
                 response   = response.toSnapshot(),
                 error      = null,
                 durationMs = (System.nanoTime() - start).nanosToMillis(),
-                onFinished = { TraceLogger.log(logTag, it) },
+                onFinished = { TraceLogger.log(OkTrace.logTag, it) },
             )
             response
         } catch (e: Exception) {
@@ -40,7 +38,7 @@ internal class OkTraceInterceptor(
                 response   = null,
                 error      = e,
                 durationMs = (System.nanoTime() - start).nanosToMillis(),
-                onFinished = { TraceLogger.log(logTag, it) },
+                onFinished = { TraceLogger.log(OkTrace.logTag, it) },
             )
             throw e
         }
