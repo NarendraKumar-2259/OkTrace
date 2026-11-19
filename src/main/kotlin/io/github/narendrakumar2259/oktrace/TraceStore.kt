@@ -12,9 +12,15 @@ object TraceStore {
         inFlight[entry.id] = entry
     }
 
+    /**
+     * Records a finished span. Spans finish innermost-first, so each one is
+     * inserted by the order its interceptor started, which keeps
+     * [TraceEntry.spans] in chain order.
+     */
     fun addSpan(traceId: String, span: InterceptorSpan) {
-        val entry = inFlight[traceId] ?: return  // find the entry
-        inFlight[traceId] = entry.copy(spans = entry.spans + span)  // update it
+        inFlight.computeIfPresent(traceId) { _, entry ->
+            entry.copy(spans = (entry.spans + span).sortedBy { it.sequence })
+        }
     }
 
     fun finishTrace(

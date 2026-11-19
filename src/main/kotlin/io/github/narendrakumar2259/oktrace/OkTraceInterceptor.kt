@@ -6,10 +6,9 @@ import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
-internal class OkTraceInterceptor(
-    private val logTag: String,
-) : Interceptor {
+internal class OkTraceInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         if (!OkTrace.enabled) return chain.proceed(chain.request())
@@ -22,15 +21,15 @@ internal class OkTraceInterceptor(
             .tag(TraceId::class.java, TraceId(entry.id))
             .build()
 
-        val start = System.currentTimeMillis()
+        val start = System.nanoTime()
         return try {
             val response = chain.proceed(tagged)
             TraceStore.finishTrace(
                 traceId    = entry.id,
                 response   = response.toSnapshot(),
                 error      = null,
-                durationMs = System.currentTimeMillis() - start,
-                onFinished = { TraceLogger.log(logTag, it) },
+                durationMs = (System.nanoTime() - start).nanosToMillis(),
+                onFinished = { TraceLogger.log(OkTrace.logTag, it) },
             )
             response
         } catch (e: Exception) {
@@ -38,8 +37,8 @@ internal class OkTraceInterceptor(
                 traceId    = entry.id,
                 response   = null,
                 error      = e,
-                durationMs = System.currentTimeMillis() - start,
-                onFinished = { TraceLogger.log(logTag, it) },
+                durationMs = (System.nanoTime() - start).nanosToMillis(),
+                onFinished = { TraceLogger.log(OkTrace.logTag, it) },
             )
             throw e
         }
@@ -52,63 +51,87 @@ internal class ObservedInterceptor(
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
+        // No trace means OkTrace is off or its root interceptor is missing:
+        // skip snapshots entirely so a disabled OkTrace costs nothing.
         val traceId = chain.request().tag(TraceId::class.java)?.value
+            ?: return delegate.intercept(chain)
+
+        val sequence = spanSequence.incrementAndGet()
         val before = chain.request().toSnapshot()
-        val start = System.currentTimeMillis()
+        val recorder = ProceedRecorder()
+        val start = System.nanoTime()
 
-        var forwardedRequest: Request? = null
-
-        val observingChain = object : Interceptor.Chain {
-            override fun request(): Request = chain.request()
-
-            override fun proceed(request: Request): Response {
-                forwardedRequest = request
-                return chain.proceed(request)
-            }
-
-            override fun connection(): Connection? = chain.connection()
-            override fun call(): Call = chain.call()
-            override fun connectTimeoutMillis(): Int = chain.connectTimeoutMillis()
-            override fun withConnectTimeout(timeout: Int, unit: TimeUnit) = chain.withConnectTimeout(timeout, unit)
-            override fun readTimeoutMillis(): Int = chain.readTimeoutMillis()
-            override fun withReadTimeout(timeout: Int, unit: TimeUnit) = chain.withReadTimeout(timeout, unit)
-            override fun writeTimeoutMillis(): Int = chain.writeTimeoutMillis()
-            override fun withWriteTimeout(timeout: Int, unit: TimeUnit) = chain.withWriteTimeout(timeout, unit)
-        }
-
-        return try {
-            val response = delegate.intercept(observingChain)
-            val after = (forwardedRequest ?: chain.request()).toSnapshot()
-
-            traceId?.let {
-                TraceStore.addSpan(it, InterceptorSpan(
-                    interceptorName = name,
-                    requestBefore   = before,
-                    requestAfter    = after,
-                    response        = response.toSnapshot(),
-                    error           = null,
-                    durationMs      = System.currentTimeMillis() - start,
-                    diff            = RequestDiff.diff(before, after),
-                ))
-            }
-            response
+        var response: Response? = null
+        var error: Exception? = null
+        try {
+            response = delegate.intercept(ObservingChain(chain, recorder))
+            return response
         } catch (e: Exception) {
-            val after = (forwardedRequest ?: chain.request()).toSnapshot()
-            traceId?.let {
-                TraceStore.addSpan(it, InterceptorSpan(
-                    interceptorName = name,
-                    requestBefore   = before,
-                    requestAfter    = after,
-                    response        = null,
-                    error           = e,
-                    durationMs      = System.currentTimeMillis() - start,
-                    diff            = RequestDiff.diff(before, after),
-                ))
-            }
+            error = e
             throw e
+        } finally {
+            val durationNanos = System.nanoTime() - start
+            val after = (recorder.forwardedRequest ?: chain.request()).toSnapshot()
+            TraceStore.addSpan(traceId, InterceptorSpan(
+                interceptorName = name,
+                requestBefore   = before,
+                requestAfter    = after,
+                response        = response?.toSnapshot(),
+                error           = error,
+                durationMs      = durationNanos.nanosToMillis(),
+                diff            = RequestDiff.diff(before, after),
+                selfDurationMs  = (durationNanos - recorder.proceedNanos).coerceAtLeast(0).nanosToMillis(),
+                sequence        = sequence,
+            ))
         }
     }
+
+    private companion object {
+        val spanSequence = AtomicLong()
+    }
 }
+
+/** What an observed interceptor sent down the chain, and how long that took. */
+private class ProceedRecorder {
+    var forwardedRequest: Request? = null
+    var proceedNanos: Long = 0L
+}
+
+/**
+ * Forwards everything to [chain] while recording calls to [proceed].
+ * The `withXxxTimeout` variants stay wrapped, so an interceptor that changes
+ * a timeout before proceeding is still observed.
+ */
+private class ObservingChain(
+    private val chain: Interceptor.Chain,
+    private val recorder: ProceedRecorder,
+) : Interceptor.Chain {
+    override fun request(): Request = chain.request()
+
+    override fun proceed(request: Request): Response {
+        recorder.forwardedRequest = request
+        val start = System.nanoTime()
+        try {
+            return chain.proceed(request)
+        } finally {
+            recorder.proceedNanos += System.nanoTime() - start
+        }
+    }
+
+    override fun connection(): Connection? = chain.connection()
+    override fun call(): Call = chain.call()
+    override fun connectTimeoutMillis(): Int = chain.connectTimeoutMillis()
+    override fun withConnectTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain =
+        ObservingChain(chain.withConnectTimeout(timeout, unit), recorder)
+    override fun readTimeoutMillis(): Int = chain.readTimeoutMillis()
+    override fun withReadTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain =
+        ObservingChain(chain.withReadTimeout(timeout, unit), recorder)
+    override fun writeTimeoutMillis(): Int = chain.writeTimeoutMillis()
+    override fun withWriteTimeout(timeout: Int, unit: TimeUnit): Interceptor.Chain =
+        ObservingChain(chain.withWriteTimeout(timeout, unit), recorder)
+}
+
+private fun Long.nanosToMillis(): Long = TimeUnit.NANOSECONDS.toMillis(this)
 
 @JvmInline value class TraceId(val value: String)
 

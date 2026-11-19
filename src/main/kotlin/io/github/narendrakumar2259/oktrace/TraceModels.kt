@@ -48,8 +48,13 @@ data class InterceptorSpan(
     val requestAfter: RequestSnapshot,
     val response: ResponseSnapshot?,
     val error: Throwable?,
+    /** Time from entering this interceptor until it returned, including everything after it in the chain. */
     val durationMs: Long,
     val diff: RequestDiffResult,
+    /** Time spent in this interceptor itself: [durationMs] minus the time spent inside `chain.proceed()`. */
+    val selfDurationMs: Long = durationMs,
+    /** Start order inside the trace; spans are kept sorted by it. */
+    internal val sequence: Long = 0L,
 )
 
 data class TraceEntry(
