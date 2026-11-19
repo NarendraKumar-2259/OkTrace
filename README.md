@@ -83,9 +83,14 @@ val client = OkHttpClient.Builder()
 | Header added | `+` | `+ Authorization: Bearer ...` |
 | Header removed | `-` | `- X-Debug-Token` |
 | Header changed | `~` | `~ Content-Type: application/json` |
-| URL changed | `~` | `~ URL changed` |
+| Method changed | `~` | `~ Method: GET → POST` |
+| URL changed | `~` | `~ URL: https://api.example.com/v2/login` |
 | Body changed | `~` | `~ Body changed` |
 | No changes | — | `[pass-through]` |
+
+The time next to each interceptor is its **own** time: the rest of the chain and the network are excluded. `InterceptorSpan.durationMs` still holds the full time, including downstream work.
+
+Request bodies are previewed up to 4 KB. One-shot and duplex bodies are never read, so streamed uploads are sent untouched. Server-sent event streams and protocol upgrades are not previewed, so OkTrace never waits on them.
 
 ---
 
@@ -101,6 +106,12 @@ class MyApp : Application() {
             OkTrace.enabled       = true    // only in debug builds!
             OkTrace.logTag        = "MyApp" // change log tag (default: "OkTrace")
             TraceStore.maxEntries = 50      // limit memory usage (default: 100)
+
+            // Send traces to Logcat under logTag (default: println → "System.out")
+            OkTrace.logger = TraceLogSink { tag, message -> Log.d(tag, message) }
+
+            // Hide secrets in the printed output; changes are still reported
+            OkTrace.redactHeader("Authorization", "Cookie")
         }
     }
 }
@@ -115,7 +126,7 @@ val traces = OkTrace.store.entries
 traces.forEach { trace ->
     println("${trace.method} ${trace.url} — ${trace.totalDurationMs}ms")
     trace.spans.forEach { span ->
-        println("  ${span.interceptorName}: ${span.diff.hasChanges}")
+        println("  ${span.interceptorName}: ${span.selfDurationMs}ms, changed=${span.diff.hasChanges}")
     }
 }
 ```
