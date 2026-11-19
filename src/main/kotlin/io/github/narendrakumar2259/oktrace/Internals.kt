@@ -1,14 +1,35 @@
 package io.github.narendrakumar2259.oktrace
 
 import okio.Buffer
+import okio.ForwardingSink
+import java.io.IOException
+import okio.buffer
 
 private const val PREVIEW_BYTES = 4096L
 
+/** Placeholder recorded instead of a body OkTrace must not read. */
+internal const val UNREADABLE_BODY = "<one-shot or duplex body, not captured>"
+
 internal fun okhttp3.Response.captureBodyPreview(): String? = try {
-    val bytes = peekBody(PREVIEW_BYTES).bytes()
-    if (bytes.isLikelyText()) bytes.toString(Charsets.UTF_8) else null
+    if (isStreaming()) {
+        null
+    } else {
+        val bytes = peekBody(PREVIEW_BYTES).bytes()
+        if (bytes.isLikelyText()) bytes.toString(Charsets.UTF_8) else null
+    }
 } catch (_: Exception) {
     null
+}
+
+/**
+ * `peekBody` blocks until it has [PREVIEW_BYTES] or the stream ends. For a
+ * protocol upgrade or a server-sent event stream that can take forever, so
+ * these responses are never previewed.
+ */
+private fun okhttp3.Response.isStreaming(): Boolean {
+    if (code == 101) return true
+    val type = body?.contentType() ?: return false
+    return type.type == "text" && type.subtype == "event-stream"
 }
 
 internal fun okhttp3.Headers.toMap(): Map<String, List<String>> {
@@ -27,13 +48,45 @@ internal fun ByteArray.isLikelyText(): Boolean {
     return printable.toDouble() / sample.size > 0.85
 }
 
-internal fun okhttp3.Request.captureBodyPreview(): String? = try {
-    val copy = newBuilder().build()
+/**
+ * Captures at most [PREVIEW_BYTES] of the request body.
+ *
+ * One-shot and duplex bodies are never written here: writing them would use
+ * up the only copy, and the real request would then fail. Other bodies are
+ * written into a sink that stops after the preview size, so a large upload is
+ * not copied into memory once per observed interceptor.
+ */
+internal fun okhttp3.Request.captureBodyPreview(): String? {
+    val body = body ?: return null
+    if (body.isOneShot() || body.isDuplex()) return UNREADABLE_BODY
     val buffer = Buffer()
-    copy.body?.writeTo(buffer)
+    try {
+        val capped = CappedSink(buffer, PREVIEW_BYTES).buffer()
+        body.writeTo(capped)
+        capped.flush()
+    } catch (_: PreviewFull) {
+        // Enough bytes for the preview; the rest of the body is not needed.
+    } catch (_: Exception) {
+        return null
+    }
     val bytes = buffer.readByteArray()
-    if (bytes.isLikelyText()) bytes.toString(Charsets.UTF_8).take(4096) else null
-} catch (_: Exception) { null }
+    return if (bytes.isLikelyText()) bytes.toString(Charsets.UTF_8) else null
+}
+
+private class PreviewFull : IOException()
+
+private class CappedSink(private val target: Buffer, private val limit: Long) : ForwardingSink(target) {
+    override fun write(source: Buffer, byteCount: Long) {
+        val room = limit - target.size
+        if (room <= 0) throw PreviewFull()
+        val toWrite = minOf(room, byteCount)
+        super.write(source, toWrite)
+        if (toWrite < byteCount) {
+            source.skip(byteCount - toWrite)
+            throw PreviewFull()
+        }
+    }
+}
 
 internal object RequestDiff {
     fun diff(before: RequestSnapshot, after: RequestSnapshot) = RequestDiffResult(
